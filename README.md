@@ -1,5 +1,4 @@
-# Mine Cells
+# Games
 
-A Dead Cells style platformer in Minecraft worlds. Game designer: Wes.
-
-Press Enter to start. Press F for full screen. Keyboard and USB game controllers work.
+- [Mine Cells](mine-cells/): a Dead Cells style platformer in Minecraft worlds
+- [Brick Elementals](brick-elementals/): a 3D brick-world action game
