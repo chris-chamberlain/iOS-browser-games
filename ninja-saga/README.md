@@ -6,3 +6,6 @@ Current build: M0-02 sandbox and test page.
 
 Play: https://chris-chamberlain.github.io/ios-browser-games/ninja-saga/
 On iPhone, open the link in Safari, tap Share, Add to Home Screen, then launch from the icon for full screen.
+
+Source: `source/` holds src (sim.js, app.js, overlay is merged into app.js, template.html), tools (build.mjs, bundle-three.mjs, smoke tests) and lib (Three.js r187 bundle).
+Build: `node source/tools/build.mjs <build-id> index.html` from inside `source/`.
