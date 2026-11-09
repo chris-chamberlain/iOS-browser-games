@@ -56,6 +56,7 @@ html,body{position:fixed;top:0;left:0;width:100%;height:var(--vh,100%);margin:0;
 #bar{position:fixed;top:6px;left:256px;right:8px;z-index:11;display:flex;align-items:center;gap:6px;pointer-events:none}
 #bar button{pointer-events:auto;font:700 12px -apple-system,system-ui,sans-serif;color:#fff;background:rgba(11,13,12,.7);border:1px solid #00f5d4;border-radius:6px;padding:7px 10px;touch-action:manipulation}
 #banner{display:none;flex:0 1 auto;min-width:0;align-items:center;gap:6px;font:12px/1.3 -apple-system,system-ui,sans-serif;background:rgba(11,13,12,.72);border-radius:6px;padding:5px 8px;pointer-events:none}
+#info{display:none;position:fixed;top:38px;left:44px;z-index:7;font:11px/1.3 ui-monospace,Menlo,monospace;background:rgba(11,13,12,.55);border-radius:4px;padding:3px 6px;pointer-events:none}
 #toast{display:none;position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:13;max-width:70%;background:#0f6b66;border:1px solid #00f5d4;border-radius:8px;padding:9px 12px;font:13px -apple-system,system-ui,sans-serif;text-align:center;pointer-events:none}
 #start button{font:700 20px -apple-system,system-ui,sans-serif;color:#fff;background:#0f6b66;border:2px solid #00f5d4;border-radius:10px;padding:12px 30px;margin:6px;touch-action:manipulation}
 #start button.alt{background:#25302c;border-color:#4a5a54;font-size:16px}
@@ -67,14 +68,15 @@ html,body{position:fixed;top:0;left:0;width:100%;height:var(--vh,100%);margin:0;
 <div id="hud"><div id="hp"><i></i></div><div id="stBase"></div><div id="stThumb"></div><div id="lock"></div></div>
 <div id="in"></div>
 <div id="ov"></div>
-<div id="bar"><div id="banner"><span id="bt"></span><button data-act="stop">Stop</button></div><button id="tb">TEST</button></div>
+<div id="bar"><div id="banner"><span id="bt"></span><button data-act="stop">Stop</button></div><button id="pb">PAL</button><button id="tb">TEST</button></div>
+<div id="info"></div>
 <div id="toast"></div>
 <div id="probe"></div>
 <div id="rot" class="full">Rotate your phone to landscape</div>
 <div id="tap" class="full">Tap to continue</div>
 <div id="start" class="full">
   <h1>NINJA SAGA</h1>
-  <p>M0 Sandbox</p>
+  <p>M1 Storm movement</p>
   <p id="ver"></p>
   <p>Landscape only.</p>
   <div><button id="playBtn">Play</button><button id="testBtn" class="alt">Run tests</button></div>

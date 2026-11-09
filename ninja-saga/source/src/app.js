@@ -9,7 +9,9 @@ const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const lerp = (a, b, t) => a + (b - a) * t;
 
 /* ---------- tuning tables ---------- */
-const PAL = { basalt: '#1f2421', cyan: '#00f5d4', orange: '#ff9f1c', teal: '#0f3d40', water: '#1c7c86', red: '#d62828', white: '#ffffff', ink: '#0b0d0c' };
+const PAL = { platTop: '#4b514a', platSide: '#2a302c', lava: '#8a2c0e', basalt: '#1f2421', cyan: '#00f5d4', orange: '#ff9f1c', teal: '#0f3d40', water: '#1c7c86', red: '#d62828', white: '#ffffff', ink: '#0b0d0c' };
+const PALDEF = { skyTop: PAL.teal, horizon: PAL.orange, fog: PAL.teal, ground: PAL.basalt, rim: '#ff9f1c', platTop: PAL.platTop, platSide: PAL.platSide, lava: PAL.lava };
+const PALNOW = Object.assign({}, PALDEF);
 const LADDER = [1.5, 1.25, 1.0, 0.85];
 const PART_SCALE = [1, 1, 0.5, 0.25];
 const TUNE = { downMs: 18.5, upMs: 13.5, outlinePx: 3, fov: 55 };
@@ -33,13 +35,14 @@ function tryStore(fn, dflt) { try { return fn(); } catch (e) { return dflt; } }
 let W = innerWidth, H = innerHeight;
 let started = false;
 const P = new Set(); // pause reasons: rot, vis, audio, gl
-const sim = Sim.create();
+const sim = Sim.create('course');
 const CHK = {
   sandbox: null, render: null, touch: null, audio: { fx: 0, hit: 0, music: 0, amb: 0, uw: 0, silent: [], decodeOk: null, state: '' },
   soak: null, orient: { portraitPauses: 0, resizesApplied: 0, resizesSeen: 0, last: '', lateFixes: 0, lowestH: 9999 },
   replay: null, ctxLost: 0, ctxRestored: 0, visHidden: 0, renderRuns: {}
 };
-const TOUCH = { down: 0, maxSim: 0, slideAJ: 0, cancels: 0, edgeCancels: 0, violations: 0, testT0: 0, testEnd: 0, testMax: 0, edgeDrags: 0, edgeDowns: 0, minX0: 1e9, baseN: 0, baseB: 0, result: null, earthLast: '' };
+const M1 = { reach: null, play: null, cbot: null, perf: null, camMin: 1e9, camClip: 0, lastClip: 0, pre: null, aaVerdict: '' };
+const TOUCH = { down: 0, maxSim: 0, slideAJ: 0, cancels: 0, edgeCancels: 0, violations: 0, testT0: 0, testEnd: 0, testMax: 0, edgeDrags: 0, edgeDowns: 0, minX0: 1e9, taps: 0, holds: 0, prevN: 0, prevB: 0, result: null, earthLast: '' };
 
 /* ---------- input ---------- */
 const inEl = $('#in');
@@ -280,15 +283,61 @@ function makeGround() {
   for (let i = 0; i < g.attributes.position.count; i++) groundR.push(cosRand());
   fillGround(g, PAL.basalt); return g;
 }
+const fieldGroup = new THREE.Group(); fieldGroup.visible = false; scene.add(fieldGroup);
 const groundGeo = makeGround();
-scene.add(new THREE.Mesh(groundGeo, matEnv));
+fieldGroup.add(new THREE.Mesh(groundGeo, matEnv));
 for (let i = 0; i < 12; i++) {
   const h = 2 + cosRand() * 5, m = new THREE.Mesh(colorGeom(new THREE.BoxGeometry(1.4, h, 1.4), i % 3 ? '#2d332f' : '#3a322c', 'env'), matEnv);
-  m.position.set(-30 + i * 6 + cosRand() * 3, h / 2, -9 - cosRand() * 8); scene.add(m);
+  m.position.set(-30 + i * 6 + cosRand() * 3, h / 2, -9 - cosRand() * 8); fieldGroup.add(m);
 }
 const dummy = new THREE.Mesh(colorGeom(new THREE.CylinderGeometry(0.5, 0.5, 1.8, 12), '#6b3f2a', 'enemy'), matEnemy);
-dummy.position.set(6, 0.9, -3); scene.add(dummy);
-const dummyOut = new THREE.Mesh(dummy.geometry, matOutline); dummyOut.position.copy(dummy.position); scene.add(dummyOut);
+dummy.position.set(6, 0.9, -3); fieldGroup.add(dummy);
+const dummyOut = new THREE.Mesh(dummy.geometry, matOutline); dummyOut.position.copy(dummy.position); fieldGroup.add(dummyOut);
+
+
+// M1 course: boxes and the heightfield come from the Sim world, so what you see is what collides
+const courseGroup = new THREE.Group(); scene.add(courseGroup);
+const courseW = Sim.getWorld('course');
+const courseParts = [];
+function paintBox(geo, tag, i) {
+  const n = geo.attributes.normal, a = geo.attributes.aCol, top = hexRGB(tag === 'yard' ? PALNOW.ground : PALNOW.platTop), side = hexRGB(tag === 'camwall' || tag === 'wall' ? '#1b1f1c' : PALNOW.platSide);
+  const k = 0.92 + (i % 3) * 0.06;
+  for (let v = 0; v < n.count; v++) { const c = n.getY(v) > 0.5 ? top : side; a.setXYZ(v, c[0] * k, c[1] * k, c[2] * k); }
+  a.needsUpdate = true;
+}
+courseW.boxes.forEach((b, i) => {
+  const geo = colorGeom(new THREE.BoxGeometry(b.x1 - b.x0, b.y1 - b.y0, b.z1 - b.z0), '#808080', 'env');
+  const m = new THREE.Mesh(geo, matEnv); m.position.set((b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, (b.z0 + b.z1) / 2); courseGroup.add(m);
+  courseParts.push({ geo, tag: b.tag, i }); paintBox(geo, b.tag, i);
+});
+let hfGeo = null;
+(function () {
+  const hf = courseW.hf; if (!hf) return;
+  const W1 = hf.nx + 1, pos = new Float32Array(W1 * (hf.nz + 1) * 3), idx = [];
+  for (let j = 0; j <= hf.nz; j++) for (let i = 0; i <= hf.nx; i++) { const k = (j * W1 + i) * 3; pos[k] = hf.x0 + i * hf.cell; pos[k + 1] = hf.h[j * W1 + i]; pos[k + 2] = hf.z0 + j * hf.cell; }
+  for (let j = 0; j < hf.nz; j++) for (let i = 0; i < hf.nx; i++) { const a = j * W1 + i; idx.push(a, a + W1, a + 1, a + 1, a + W1, a + W1 + 1); }
+  hfGeo = new THREE.BufferGeometry(); hfGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); hfGeo.setIndex(idx); hfGeo.computeVertexNormals();
+  hfGeo.setAttribute('aCol', new THREE.BufferAttribute(new Float32Array(pos.length), 3));
+  courseGroup.add(new THREE.Mesh(hfGeo, matEnv));
+})();
+function paintHF() {
+  if (!hfGeo) return;
+  const n = hfGeo.attributes.normal, a = hfGeo.attributes.aCol, b = hexRGB(PALNOW.ground);
+  for (let v = 0; v < n.count; v++) { const k = 0.7 + 0.5 * n.getY(v); a.setXYZ(v, b[0] * k, b[1] * k, b[2] * k); }
+  a.needsUpdate = true;
+}
+const lavaMat = toonMaterial('env', 2, 0);
+const lavaGeo = new THREE.PlaneGeometry(700, 700).rotateX(-Math.PI / 2);
+const lavaMesh = new THREE.Mesh(colorGeom(lavaGeo, PAL.lava, 'env'), lavaMat); lavaMesh.position.y = -19; courseGroup.add(lavaMesh);
+function paintLava() { const c = hexRGB(PALNOW.lava), a = lavaGeo.attributes.aCol; for (let v = 0; v < a.count; v++) a.setXYZ(v, c[0], c[1], c[2]); a.needsUpdate = true; }
+paintHF(); paintLava();
+const lanterns = [];
+courseW.cps.forEach((c) => {
+  const g = new THREE.Group(); g.position.set(c.x, c.y, -2.6);
+  const post = new THREE.Mesh(colorGeom(new THREE.CylinderGeometry(0.08, 0.1, 1.6, 6), '#2a2d2b', 'env'), matEnv); post.position.y = 0.8; g.add(post);
+  const lamp = new THREE.Mesh(colorGeom(new THREE.IcosahedronGeometry(0.22, 1), '#ffb23a', 'env'), matEnv); lamp.position.y = 1.75; g.add(lamp);
+  courseGroup.add(g); lanterns.push(lamp);
+});
 
 // stress group: 100 spheres, about 98k triangles, frustum culling off so the load is constant
 const stress = new THREE.Group(); stress.visible = false; scene.add(stress);
@@ -302,14 +351,89 @@ for (let i = 0; i < 8; i++) { // brings the stress scene to about 120 draw calls
   m.position.set(-10 + i * 3, 0.6 + i * 0.1, -22); m.frustumCulled = false; stress.add(m);
 }
 
-// Storm: procedural capsule with inverted-hull outline, white hair, red scarf, cyan belt
+// Storm: procedural rig with the final clip names. Uploaded GLB files replace the meshes later and keep the clip names.
 const storm = new THREE.Group(); scene.add(storm);
-const stormBody = new THREE.Mesh(colorGeom(new THREE.CapsuleGeometry(0.35, 1.0, 6, 16), '#2b302d', 'storm'), matChar); stormBody.position.y = 0.85; storm.add(stormBody);
-const stormHull = new THREE.Mesh(stormBody.geometry, matOutline); stormHull.position.y = 0.85; storm.add(stormHull);
-const hair = new THREE.Mesh(colorGeom(new THREE.ConeGeometry(0.3, 0.5, 8), '#f4f4f0', 'storm'), matChar); hair.position.set(0, 1.85, -0.06); hair.rotation.x = -0.35; storm.add(hair);
-const scarf = new THREE.Mesh(colorGeom(new THREE.TorusGeometry(0.33, 0.07, 8, 16), PAL.red, 'storm'), matChar); scarf.position.y = 1.42; scarf.rotation.x = Math.PI / 2; storm.add(scarf);
-const tail = new THREE.Mesh(colorGeom(new THREE.BoxGeometry(0.1, 0.12, 0.7), PAL.red, 'storm'), matChar); tail.position.set(0, 1.38, -0.5); tail.rotation.x = 0.25; storm.add(tail);
-const belt = new THREE.Mesh(colorGeom(new THREE.TorusGeometry(0.352, 0.04, 6, 16), PAL.cyan, 'storm'), matChar); belt.position.y = 0.85; belt.rotation.x = Math.PI / 2; storm.add(belt);
+const RIG = {};
+function rigPart(geo, hex, parent, x, y, z, outline) {
+  const m = new THREE.Mesh(colorGeom(geo, hex, 'storm'), matChar); m.position.set(x, y, z); parent.add(m);
+  if (outline !== false) m.add(new THREE.Mesh(geo, matOutline));
+  return m;
+}
+(function buildStorm() {
+  RIG.hips = new THREE.Group(); RIG.hips.position.y = 0.92; storm.add(RIG.hips);
+  RIG.body = new THREE.Group(); RIG.hips.add(RIG.body);
+  rigPart(new THREE.CapsuleGeometry(0.24, 0.4, 4, 12), '#2b302d', RIG.body, 0, 0.38, 0);
+  const belt = rigPart(new THREE.TorusGeometry(0.255, 0.04, 6, 16), PAL.cyan, RIG.body, 0, 0.08, 0, false); belt.rotation.x = Math.PI / 2;
+  RIG.head = new THREE.Group(); RIG.head.position.set(0, 0.98, 0); RIG.body.add(RIG.head);
+  rigPart(new THREE.SphereGeometry(0.19, 12, 10), '#c9a98c', RIG.head, 0, 0, 0);
+  rigPart(new THREE.BoxGeometry(0.3, 0.07, 0.1), '#1b1e1c', RIG.head, 0, 0.02, 0.15, false);
+  for (let i = 0; i < 5; i++) {
+    const a = (i - 2) * 0.55, h = rigPart(new THREE.ConeGeometry(0.075, 0.34, 6), '#f4f4f0', RIG.head, Math.sin(a) * 0.14, 0.16, -0.1 - Math.cos(a) * 0.04, false);
+    h.rotation.set(-0.95, 0, -a * 0.6);
+  }
+  RIG.scarf = new THREE.Group(); RIG.scarf.position.set(0, 0.72, 0); RIG.body.add(RIG.scarf);
+  const ring = rigPart(new THREE.TorusGeometry(0.25, 0.07, 8, 16), PAL.red, RIG.scarf, 0, 0, 0, false); ring.rotation.x = Math.PI / 2;
+  RIG.tail = new THREE.Group(); RIG.tail.position.set(0, 0, -0.2); RIG.scarf.add(RIG.tail);
+  RIG.segs = []; let par = RIG.tail;
+  for (let i = 0; i < 4; i++) {
+    const g = new THREE.Group(); g.position.z = i ? -0.22 : 0; par.add(g); rigPart(new THREE.BoxGeometry(0.13, 0.025, 0.22), PAL.red, g, 0, 0, -0.11, false); RIG.segs.push(g); par = g;
+  }
+  const limb = (r, len) => new THREE.CapsuleGeometry(r, len, 4, 8);
+  RIG.armL = new THREE.Group(); RIG.armL.position.set(0.31, 0.64, 0); RIG.body.add(RIG.armL); rigPart(limb(0.075, 0.36), '#2b302d', RIG.armL, 0, -0.26, 0);
+  RIG.armR = new THREE.Group(); RIG.armR.position.set(-0.31, 0.64, 0); RIG.body.add(RIG.armR); rigPart(limb(0.075, 0.36), '#2b302d', RIG.armR, 0, -0.26, 0);
+  RIG.legL = new THREE.Group(); RIG.legL.position.set(0.13, -0.02, 0); RIG.body.add(RIG.legL); rigPart(limb(0.1, 0.62), '#1f2421', RIG.legL, 0, -0.43, 0);
+  RIG.legR = new THREE.Group(); RIG.legR.position.set(-0.13, -0.02, 0); RIG.body.add(RIG.legR); rigPart(limb(0.1, 0.62), '#1f2421', RIG.legR, 0, -0.43, 0);
+})();
+// Clip table. Each entry returns a target pose; the rig blends toward it. Clips not used yet are listed so the names exist.
+const POSE0 = { lean: 0, bob: 0, flip: 0, roll: 0, armL: 0, armR: 0, armLz: 0.1, armRz: -0.1, legL: 0, legR: 0, head: 0 };
+const POSE = Object.assign({}, POSE0);
+const CLIPS = {
+  idle_loop: (t) => { const b = Math.sin(t * 2.2); return { lean: 0.03, bob: b * 0.012, armL: 0.1 + b * 0.05, armR: 0.1 + b * 0.05, armLz: 0.14, armRz: -0.14 }; },
+  run_loop: (t, c) => { const s = Math.sin(c.ph), k = Math.min(1, c.speed / 7); return { lean: 0.28 * k, bob: Math.abs(Math.cos(c.ph)) * 0.05 - 0.03, armL: -s * 1.0 * k, armR: s * 1.0 * k, legL: s * 1.0 * k, legR: -s * 1.0 * k, head: -0.1 * k }; },
+  jump: (t, c) => ({ lean: -0.05, armL: -2.5, armR: -2.5, armLz: 0.25, armRz: -0.25, legL: 0.5, legR: -0.25, bob: 0.03 }),
+  fall_loop: (t) => ({ lean: -0.08, armL: -1.2 + Math.sin(t * 9) * 0.12, armR: -1.2 - Math.sin(t * 9) * 0.12, armLz: 0.6, armRz: -0.6, legL: 0.4, legR: -0.35 }),
+  land: (t, c) => ({ lean: 0.3, bob: -0.2 * Math.sin(Math.PI * c.p), armL: -0.6, armR: -0.6, armLz: 0.3, armRz: -0.3, legL: -0.8, legR: -0.8 }),
+  double_jump: (t, c) => ({ flip: c.p * Math.PI * 2, armL: -0.9, armR: -0.9, armLz: 0.2, armRz: -0.2, legL: -1.1, legR: -1.1, bob: 0.1 * Math.sin(Math.PI * c.p) }),
+  dash: () => ({ lean: 0.9, bob: -0.1, armL: 1.3, armR: 1.3, armLz: 0.1, armRz: -0.1, legL: -0.9, legR: 0.85, head: -0.35 }),
+  air_dash: () => ({ lean: 1.35, armL: 1.6, armR: 1.6, armLz: 0.1, armRz: -0.1, legL: 0.5, legR: 0.6, head: -0.5 }),
+  wall_run_loop: (t, c) => { const s = Math.sin(c.ph * 1.3); return { lean: 0.2, roll: c.wallSide * 0.5, armL: -s * 0.8, armR: s * 0.8, armLz: c.wallSide > 0 ? 0.2 : 1.1, armRz: c.wallSide > 0 ? -1.1 : -0.2, legL: s * 1.1, legR: -s * 1.1 }; },
+  wall_kick: (t, c) => ({ lean: -0.3, armL: -1.6, armR: -1.6, armLz: 0.8, armRz: -0.8, legL: 0.9, legR: -0.9, roll: -c.wallSide * 0.25 }),
+  cast_needle: null, cast_boulder: null, hit_light: null, hit_heavy: null, swim_loop: null, swim_stroke: null
+};
+const ANIM = { clip: 'idle_loop', t: 0, ph: 0 };
+function pickClip(s) {
+  const since = (ev) => (s.step - ev) / 60;
+  if (s.wallRun > 0) return 'wall_run_loop';
+  if (s.dash > 0) return s.grounded ? 'dash' : 'air_dash';
+  if (!s.grounded) {
+    if (since(s.evKick) < 0.2) return 'wall_kick';
+    if (since(s.evDJump) < 0.36) return 'double_jump';
+    if (since(s.evJump) < 0.22 && s.vy > 0) return 'jump';
+    return 'fall_loop';
+  }
+  if (since(s.evLand) < 0.18) return 'land';
+  return Math.hypot(s.vx, s.vz) > 0.6 ? 'run_loop' : 'idle_loop';
+}
+const CLIP_LEN = { jump: 0.22, land: 0.18, double_jump: 0.36, wall_kick: 0.2 };
+function animateStorm(dt, alpha) {
+  const s = sim, speed = Math.hypot(s.vx, s.vz), name = pickClip(s);
+  if (name !== ANIM.clip) { ANIM.clip = name; ANIM.t = 0; } else ANIM.t += dt;
+  ANIM.ph += dt * (5 + speed * 1.1);
+  const wx = -s.wnx * Math.cos(s.yaw) + s.wnz * Math.sin(s.yaw);
+  const ctx = { ph: ANIM.ph, speed, p: Math.min(1, ANIM.t / (CLIP_LEN[name] || 1)), wallSide: wx > 0 ? 1 : -1 };
+  const tgt = Object.assign({}, POSE0, CLIPS[name](ANIM.t, ctx));
+  if (s.atk > 0) { tgt.armR = -1.9 * (s.atk / Sim.T.atkFrames); tgt.lean += 0.15; }
+  const k = name === 'double_jump' ? 1 : 1 - Math.exp(-dt * 22);
+  for (const key in POSE0) POSE[key] += (tgt[key] - POSE[key]) * (key === 'flip' ? 1 : k);
+  RIG.hips.position.y = 0.92 + POSE.bob;
+  RIG.body.rotation.set(POSE.lean + POSE.flip, 0, POSE.roll);
+  RIG.head.rotation.x = POSE.head;
+  RIG.armL.rotation.set(POSE.armL, 0, POSE.armLz); RIG.armR.rotation.set(POSE.armR, 0, POSE.armRz);
+  RIG.legL.rotation.x = POSE.legL; RIG.legR.rotation.x = POSE.legR;
+  const sp = Math.min(1, speed / 7), rise = clamp(-s.vy * 0.04, 0, 0.6), now1 = performance.now() * 0.001;
+  RIG.tail.rotation.x = -0.9 + 0.95 * sp + rise;
+  for (let i = 0; i < RIG.segs.length; i++) RIG.segs[i].rotation.set(Math.sin(now1 * 9 - i * 1.1) * 0.12 * (0.3 + sp) - 0.1, Math.sin(now1 * 6 - i) * 0.08 * sp, 0);
+}
 const shadowMat = new THREE.ShaderMaterial({ transparent: true, depthWrite: false, uniforms: {}, vertexShader: 'varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }', fragmentShader: 'precision highp float; varying vec2 vUv; void main(){ float d=length(vUv-0.5)*2.0; gl_FragColor=vec4(0.0,0.0,0.0,0.45*(1.0-smoothstep(0.5,1.0,d))); }' });
 const blob = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 1.4).rotateX(-Math.PI / 2), shadowMat); blob.position.y = 0.02; blob.renderOrder = 1; scene.add(blob);
 
@@ -455,49 +579,81 @@ function ladderUpdate() {
   } else if (M.avg < TUNE.upMs) { if (++upCount >= 180 && ladderStep > 0) setLadder(ladderStep - 1); } else upCount = 0;
 }
 
-const rep = { rec: false, play: false, bot: false, data: [], i: 0, recHash: '', botStart: 0, botN: 0, botExpect: '', maxInt: 0, maxAt: 0, fr: 0, status: '' };
+const rep = { kind: 'user', world: 'field', pilot: false, rec: false, play: false, bot: false, data: [], i: 0, recHash: '', botStart: 0, botN: 0, botExpect: '', maxInt: 0, maxAt: 0, fr: 0, status: '' };
 function stepOnce() {
   let snap;
   if (rep.play) snap = rep.data[rep.i++];
   else if (rep.bot) snap = Sim.scripted(sim.step, SN, sim);
+  else if (rep.pilot) snap = Sim.pilot(sim, SN);
   else snap = sample();
   if (rep.rec) rep.data.push({ sx: snap.sx, sy: snap.sy, bits: snap.bits, dx: snap.dx, dy: snap.dy });
   Sim.step(sim, snap);
+  if (sim.needles < TOUCH.prevN) TOUCH.prevN = sim.needles; if (sim.boulders < TOUCH.prevB) TOUCH.prevB = sim.boulders; // a reset restarts the sim counters
+  if (!rep.play && !rep.bot && !rep.pilot && TOUCH.result === 'running') { TOUCH.taps += sim.needles - TOUCH.prevN; TOUCH.holds += sim.boulders - TOUCH.prevB; }
+  TOUCH.prevN = sim.needles; TOUCH.prevB = sim.boulders;
+  if (rep.pilot && sim.finishStep) { Sim.reset(sim, 'course'); }
   if (rep.play && rep.i >= rep.data.length) finishReplay();
   else if (rep.bot && sim.step >= rep.botN) finishBot();
 }
-function startRec() { stopReplayModes(); Sim.reset(sim); rep.data = []; rep.rec = true; rep.status = 'recording'; }
+function startRec() { stopReplayModes(); Sim.reset(sim); rep.kind = 'user'; rep.world = sim.world; rep.data = []; rep.rec = true; rep.status = 'recording'; }
 function stopRec() { if (!rep.rec) return; rep.rec = false; rep.recHash = Sim.hash(sim); rep.status = 'recorded ' + rep.data.length + ' steps'; }
-function startReplay() { if (!rep.data.length || rep.rec) { rep.status = 'nothing recorded'; return; } stopReplayModes(); Sim.reset(sim); rep.i = 0; rep.maxInt = 0; rep.maxAt = 0; rep.fr = 0; rep.play = true; rep.status = 'replaying'; }
+function startReplay() { if (!rep.data.length || rep.rec) { rep.status = 'nothing recorded'; return; } stopReplayModes(); setWorld(rep.world); Sim.reset(sim, rep.world); rep.i = 0; rep.maxInt = 0; rep.maxAt = 0; rep.fr = 0; rep.play = true; rep.status = 'replaying'; }
 function finishReplay() {
-  rep.play = false; const h = Sim.hash(sim), ok = h === rep.recHash && !sim.nan && sim.respawns === 0 && rep.maxInt <= 50;
+  rep.play = false; const h = Sim.hash(sim);
+  if (rep.kind === 'course') {
+    const ok = h === rep.recHash && !sim.nan && sim.respawns === 0 && sim.finishStep > 0 && rep.maxInt <= 50 && sim.camClip === 0;
+    M1.cbot = { pass: ok, same: h === rep.recHash, nan: sim.nan, falls: sim.respawns, finish: sim.finishStep, gaps: sim.gapDone.filter(Boolean).length, gapsAll: sim.gapDone.length, maxInt: Math.round(rep.maxInt), maxAt: rep.maxAt, steps: rep.data.length, camMin: sim.camMin, camClip: sim.camClip };
+    rep.status = 'course replay ' + (ok ? 'PASS' : 'FAIL'); finished('Course replay finished: ' + (ok ? 'PASS' : 'FAIL') + '.'); return;
+  }
+  const ok = h === rep.recHash && !sim.nan && sim.respawns === 0 && rep.maxInt <= 50;
   CHK.replay = { kind: 'recorded', pass: ok, same: h === rep.recHash, nan: sim.nan, kill: sim.respawns, maxInt: Math.round(rep.maxInt), maxAt: rep.maxAt, steps: rep.data.length };
   rep.status = 'replay ' + (ok ? 'PASS' : 'FAIL');
 }
-function startBot() { stopReplayModes(); Sim.reset(sim); rep.bot = true; rep.botStart = 0; rep.botN = 1800; rep.maxInt = 0; rep.maxAt = 0; rep.fr = 0; rep.botExpect = Sim.runScripted(rep.botN).hash; rep.status = 'bot running'; }
+function startBot() { stopReplayModes(); setWorld('field'); Sim.reset(sim, 'field'); rep.kind = 'user'; rep.bot = true; rep.botStart = 0; rep.botN = 1800; rep.maxInt = 0; rep.maxAt = 0; rep.fr = 0; rep.botExpect = Sim.runScripted(rep.botN).hash; rep.status = 'bot running'; }
 function finishBot() {
   rep.bot = false; const h = Sim.hash(sim) , ok = h === rep.botExpect && !sim.nan && sim.respawns === 0 && rep.maxInt <= 50;
   CHK.replay = { kind: 'scripted bot', pass: ok, same: h === rep.botExpect, nan: sim.nan, kill: sim.respawns, maxInt: Math.round(rep.maxInt), maxAt: rep.maxAt, steps: rep.botN };
   rep.status = 'bot ' + (ok ? 'PASS' : 'FAIL');
 }
-function stopReplayModes() { rep.rec = rep.play = rep.bot = false; }
+function stopReplayModes() { rep.rec = rep.play = rep.bot = rep.pilot = false; }
+function setWorld(name) {
+  if (sim.world !== name) { Sim.reset(sim, name); camera.position.set(sim.cx, sim.cy, sim.cz); }
+  fieldGroup.visible = name === 'field'; courseGroup.visible = name === 'course';
+}
+function courseRec() {
+  if (!M1.pre) { const r = Sim.runPilot(7000); M1.pre = { rec: r.rec, hash: r.hash, steps: r.rec.length, ok: !!r.s.finishStep }; }
+  return M1.pre;
+}
+function startCourseReplay() {
+  stopReplayModes(); const pre = courseRec();
+  setWorld('course'); Sim.reset(sim, 'course');
+  rep.kind = 'course'; rep.data = pre.rec; rep.recHash = pre.hash; rep.i = 0; rep.maxInt = 0; rep.maxAt = 0; rep.fr = 0; rep.play = true; rep.status = 'course replay running'; closeOverlay();
+}
+function restartCourse() { stopReplayModes(); setWorld('course'); Sim.reset(sim, 'course'); M1.lastClip = 0; closeOverlay(); }
+function measureReach() {
+  toast('Measuring the jump arc. This takes a few seconds.');
+  setTimeout(() => { const t0 = now(); M1.reach = Sim.measure(); M1.reach.ms = Math.round(now() - t0); renderOverlay(true); toast('Measured in ' + M1.reach.ms + ' ms: ' + (M1.reach.pass ? 'PASS' : 'FAIL') + '.'); }, 60);
+}
+function startCoursePerf() {
+  stopReplayModes(); setWorld('course'); Sim.reset(sim, 'course'); floorMode = false; lpm = false; if (ladderStep !== 0) setLadder(0);
+  rep.pilot = true; M1.perf = { t0: now(), done: false, sum: 0, n: 0, worst: 0, floorFrames: 0, fps: 0, pass: false, loops: 0 }; M.rn = 0; closeOverlay();
+}
 
 function renderFrame(alpha, dt) {
   const s = sim;
   storm.position.set(lerp(s.px, s.x, alpha), lerp(s.py, s.y, alpha), lerp(s.pz, s.z, alpha));
   storm.rotation.y = s.pyaw + Sim.wrapPi(s.yaw - s.pyaw) * alpha;
-  const k = s.atk > 0 ? s.atk / Sim.T.atkFrames : 0, air = s.grounded ? 0 : clamp(s.vy / 12, -1, 1);
-  storm.scale.set(1 + 0.18 * k - 0.06 * air, 1 - 0.1 * k + 0.1 * air, 1 + 0.18 * k - 0.06 * air);
+  animateStorm(dt / 1000, alpha);
   blob.position.x = storm.position.x; blob.position.z = storm.position.z;
   const hs = clamp(1 - storm.position.y * 0.18, 0.35, 1); blob.scale.set(hs, 1, hs);
   camera.position.set(lerp(s.pcx, s.cx, alpha), lerp(s.pcy, s.cy, alpha), lerp(s.pcz, s.cz, alpha));
   camera.lookAt(lerp(s.ptx, s.tx, alpha), lerp(s.pty, s.ty, alpha), lerp(s.ptz, s.tz, alpha));
-  sky.position.copy(camera.position);
+  sky.position.copy(camera.position); lavaMesh.position.x = s.x; lavaMesh.position.z = s.z;
   updateEmbers(dt / 1000, s.tx, s.tz);
   OUT_U.uPx.value = TUNE.outlinePx;
   // lock-on marker: DOM element placed from the projected dummy position
   const lm = $('#lock');
-  if (s.lock) {
+  if (s.lock && s.world === 'field') {
     const v = dummy.position.clone().project(camera);
     if (v.z < 1 && Math.abs(v.x) < 1.1 && Math.abs(v.y) < 1.1) { lm.style.display = 'block'; lm.style.transform = `translate(${(v.x * 0.5 + 0.5) * W - 16}px,${(0.5 - v.y * 0.5) * H - 16}px)`; } else lm.style.display = 'none';
   } else lm.style.display = 'none';
@@ -523,6 +679,13 @@ function frame(t) {
   renderFrame(acc / Sim.STEP, dt);
   drawStick();
   ladderUpdate();
+  if (sim.world === 'course') {
+    if (sim.camMin < M1.camMin) M1.camMin = sim.camMin;
+    if (sim.camClip < M1.lastClip) M1.lastClip = 0;
+    M1.camClip += sim.camClip - M1.lastClip; M1.lastClip = sim.camClip;
+    if (sim.finishStep && !M1.play && !rep.play && !rep.bot && !rep.pilot) M1.play = { time: sim.finishStep / 60, falls: sim.respawns, jumps: sim.jumps, gaps: sim.gapDone.filter(Boolean).length, all: sim.gapDone.length };
+  }
+  updateInfo(t);
   testTick();
   if (CHK.orient.last === '') CHK.orient.last = W + 'x' + H;
 }
@@ -593,6 +756,12 @@ function f1(v) { return (Math.round(v * 100) / 100).toString(); }
 const TUNERS = [
   ['gravity', () => Sim.T.gravity, (v) => { Sim.T.gravity = v; }, 1, 28],
   ['run speed', () => Sim.T.runSpeed, (v) => { Sim.T.runSpeed = v; }, 0.5, 7],
+  ['jump speed', () => Sim.T.jumpV, (v) => { Sim.T.jumpV = v; }, 0.2, 11.1],
+  ['double jump speed', () => Sim.T.djumpV, (v) => { Sim.T.djumpV = v; }, 0.2, 9.5],
+  ['jump hold gravity', () => Sim.T.holdMul, (v) => { Sim.T.holdMul = v; }, 0.02, 0.846],
+  ['air-dash speed', () => Sim.T.dashSpeed, (v) => { Sim.T.dashSpeed = v; }, 1, 20],
+  ['wall-run speed', () => Sim.T.wallSpeed, (v) => { Sim.T.wallSpeed = v; }, 0.5, 6],
+  ['camera distance (m)', () => Sim.T.camDist, (v) => { Sim.T.camDist = v; }, 0.5, 9],
   ['earth hold (steps)', () => Sim.T.earthHold, (v) => { Sim.T.earthHold = v; }, 1, 15],
   ['camera settle (s)', () => Sim.T.camSettle, (v) => { Sim.T.camSettle = Math.max(0.05, v); }, 0.02, 0.2],
   ['outline px', () => TUNE.outlinePx, (v) => { TUNE.outlinePx = Math.max(0.5, v); }, 0.5, 3],
@@ -601,32 +770,49 @@ const TUNERS = [
   ['ladder down ms', () => TUNE.downMs, (v) => { TUNE.downMs = v; }, 0.5, 18.5],
   ['ladder up ms', () => TUNE.upMs, (v) => { TUNE.upMs = v; }, 0.5, 13.5]
 ];
-const PALDEF = { skyTop: PAL.teal, horizon: PAL.orange, fog: PAL.teal, ground: PAL.basalt, rim: '#ff9f1c' };
-const PALNOW = Object.assign({}, PALDEF);
-const PALLABEL = { skyTop: 'Sky top', horizon: 'Horizon glow', fog: 'Fog', ground: 'Ground', rim: 'Rim light' };
+const PALLABEL = { skyTop: 'Sky top', horizon: 'Horizon glow', fog: 'Fog', ground: 'Yard and slope', rim: 'Rim light', platTop: 'Platform top', platSide: 'Platform side', lava: 'Pit glow' };
 const PALAPPLY = {
   skyTop(h) { skyMat.uniforms.uTop.value.copy(hex3(h)); },
   horizon(h) { skyMat.uniforms.uHor.value.copy(hex3(h)); },
   fog(h) { U.uFogCol.value.copy(hex3(h)); },
-  ground(h) { fillGround(groundGeo, h); },
-  rim(h) { U.uRim.value.copy(hex3(h)); }
+  ground(h) { fillGround(groundGeo, h); paintHF(); courseParts.forEach(p => paintBox(p.geo, p.tag, p.i)); },
+  rim(h) { U.uRim.value.copy(hex3(h)); },
+  platTop() { courseParts.forEach(p => paintBox(p.geo, p.tag, p.i)); },
+  platSide() { courseParts.forEach(p => paintBox(p.geo, p.tag, p.i)); },
+  lava() { paintLava(); }
 };
+function palSave() { tryStore(() => localStorage.setItem('ns_pal', JSON.stringify(PALNOW)), 0); }
+function palLoad() {
+  const j = tryStore(() => localStorage.getItem('ns_pal'), null); if (!j) return;
+  let o = null; try { o = JSON.parse(j); } catch (e) { return; }
+  Object.keys(PALNOW).forEach(k => { if (o && /^#[0-9a-f]{6}$/i.test(o[k] || '')) { PALNOW[k] = o[k]; PALAPPLY[k](o[k]); } });
+}
+function palText() { return Object.keys(PALNOW).map(k => PALLABEL[k] + ' ' + PALNOW[k]).join(', '); }
 function palChanges() { return Object.keys(PALNOW).filter(k => PALNOW[k].toLowerCase() !== PALDEF[k].toLowerCase()).map(k => PALLABEL[k] + ' ' + PALNOW[k]); }
 function tuneChanges() { return TUNERS.filter(t => Math.abs(t[1]() - t[4]) > 1e-9).map(t => t[0] + ' = ' + f1(t[1]())); }
 
 function touchTicks() {
   const tc = TOUCH;
-  return [['3 fingers at once', tc.testMax >= 3], ['slide ATK to JMP', tc.slideAJ > 0], ['tap EAR', sim.needles - tc.baseN > 0], ['hold EAR', sim.boulders - tc.baseB > 0], ['edge swipe', tc.edgeDrags > 0]];
+  return [['3 fingers at once', tc.testMax >= 3], ['slide ATK to JMP', tc.slideAJ > 0], ['tap EAR', tc.taps > 0], ['hold EAR', tc.holds > 0], ['edge swipe', tc.edgeDrags > 0]];
 }
 // one entry per exit check: [key, title, status, detail]
 function checkRows() {
   const R = [];
+  const rc = M1.reach;
+  R.push(['reach', 'Jump arc', rc ? (rc.pass ? 'PASS' : 'FAIL') : 'PENDING', rc ? `tap jump apex ${rc.arcTap.apex} m in ${rc.arcTap.tApex} s, ${rc.arcTap.dist} m run; held jump apex ${rc.arcHold.apex} m; max gap: single ${rc.single} m (held ${rc.singleHold}), double ${rc.double} m, air-dash ${rc.dash} m; max step: single ${rc.step1} m, double ${rc.step2} m; wall-run ${rc.wall.steps} steps over ${rc.wall.dist} m on a ${rc.wallLen} m wall (margin ${rc.wallMargin}); gap margins ${rc.rows.map(q => q.id + ' ' + q.width + '/' + q.margin).join(', ')}` : '']);
+  const pl = M1.play;
+  R.push(['play', 'Course play', pl ? (pl.gaps === pl.all ? 'PASS' : 'FAIL') : 'PENDING', pl ? `finished in ${f1(pl.time)} s, falls ${pl.falls}, jumps ${pl.jumps}, gaps cleared ${pl.gaps} of ${pl.all}` : `gaps ${sim.world === 'course' ? sim.gapDone.filter(Boolean).length : 0} of ${sim.gapDone.length}, falls ${sim.respawns}`]);
+  const cb = M1.cbot;
+  R.push(['cbot', 'Course replay', cb ? (cb.pass ? 'PASS' : 'FAIL') : 'PENDING', cb ? `${cb.steps} steps, same final state ${cb.same}, finish ${cb.finish ? 'yes' : 'no'}, gaps ${cb.gaps} of ${cb.gapsAll}, falls ${cb.falls}, NaN ${cb.nan}, longest frame ${cb.maxInt} ms at frame ${cb.maxAt}, camera clip steps ${cb.camClip}` : '']);
+  R.push(['cam', 'Camera', M1.camMin < 1e8 ? (M1.camClip === 0 ? 'PASS' : 'FAIL') : 'PENDING', M1.camMin < 1e8 ? `closest to any wall ${f1(M1.camMin)} m, steps within 0.2 m of a wall or inside it ${M1.camClip}` : '']);
+  const pf = M1.perf;
+  R.push(['perf', 'Course 60 fps', pf ? (pf.done ? (pf.stopped ? 'PENDING' : (pf.pass ? 'PASS' : 'FAIL')) : 'RUNNING') : 'PENDING', pf && pf.done && !pf.stopped ? `average ${f1(pf.fps)} fps, slowest ladder step ${pf.worst + 1}, floor frames ${pf.floorFrames}, ${M.calls} draw calls, ${M.tris} triangles, edge smoothing ${aaOn ? 'on' : 'off'}` : '']);
   const sb = CHK.sandbox;
   R.push(['sandbox', 'Sandbox', sb ? (sb.pass ? 'PASS' : 'FAIL') : 'PENDING', sb ? `WebGL2 ${sb.gl2}, Three.js r${sb.rev}, Pointer Events ${sb.pe}, audio ${sb.ac}, storage ${sb.store}, page ${(sb.size / 1e6).toFixed(2)} MB` : '']);
   const r = CHK.render;
   R.push(['render', 'Rendering', r ? (r.done ? (r.stopped ? 'PENDING' : (r.pass ? 'PASS' : 'FAIL')) : 'RUNNING') : 'PENDING', r && r.done && !r.stopped ? `average ${f1(r.fps)} fps, slowest ladder step ${r.worst + 1}, floor frames ${r.floorFrames}, ${r.calls} draw calls, ${r.tris} triangles, edge smoothing ${r.aa ? 'on' : 'off'}` + ['off', 'on'].map(k => { const q = CHK.renderRuns[k]; return q ? `; run with smoothing ${k}: ${f1(q.fps)} fps, slowest step ${q.worst + 1}, floor frames ${q.floorFrames}, ${q.pass ? 'pass' : 'fail'}` : ''; }).join('') : (r && !r.done ? 'running' : '')]);
   const tc = TOUCH;
-  R.push(['touch', 'Touch', tc.result === 'running' ? 'RUNNING' : (tc.result || 'PENDING'), `most fingers ${tc.testMax || tc.maxSim}, slides ATK to JMP ${tc.slideAJ}, taps ${sim.needles - tc.baseN}, holds ${sim.boulders - tc.baseB}, edge swipes ${tc.edgeDrags}, cancelled touches ${tc.cancels} (edge ${tc.edgeCancels}, other ${tc.violations}), touches starting in the edge zone ${tc.edgeDowns}, lowest touch x ${tc.minX0 === 1e9 ? '-' : Math.round(tc.minX0)}, edge zone ${Math.round(UI.edge)} px`]);
+  R.push(['touch', 'Touch', tc.result === 'running' ? 'RUNNING' : (tc.result || 'PENDING'), `most fingers ${tc.testMax || tc.maxSim}, slides ATK to JMP ${tc.slideAJ}, taps ${tc.taps}, holds ${tc.holds}, edge swipes ${tc.edgeDrags}, cancelled touches ${tc.cancels} (edge ${tc.edgeCancels}, other ${tc.violations}), touches starting in the edge zone ${tc.edgeDowns}, lowest touch x ${tc.minX0 === 1e9 ? '-' : Math.round(tc.minX0)}, edge zone ${Math.round(UI.edge)} px`]);
   const au = CHK.audio, done = au.state === 'running' && au.decodeOk && au.fx > 0 && au.hit > 0 && au.music > 0 && au.amb > 0 && au.uw > 0;
   R.push(['audio', 'Audio', done ? 'PASS' : 'PENDING', `context ${au.state || 'off'}, decode ${au.decodeOk}, effect ${au.fx}, hit ${au.hit}, music ${au.music}${A.musicRouted === false ? ' (not routed to the music bus)' : ''}, ambience ${au.amb}, underwater ${au.uw}, silent switch: ${au.silent.join('; ') || 'not recorded'}`]);
   const so = CHK.soak;
@@ -642,6 +828,8 @@ function buildReport() {
   checkRows().forEach(l => lines.push(l[1] + ': ' + l[2] + (l[3] ? ' | ' + l[3] : '')));
   lines.push('View: ' + viewDiag());
   const pc = palChanges(), tc = tuneChanges();
+  lines.push('Palette now: ' + palText());
+  lines.push('Edge smoothing verdict: ' + (M1.aaVerdict || 'not given'));
   lines.push('Palette changes: ' + (pc.length ? pc.join(', ') : 'none'));
   lines.push('Tuning changes: ' + (tc.length ? tc.join(', ') : 'none'));
   lines.push('Ladder log: ' + (ladderLog.slice(-12).map(l => Math.round(l[0] / 1000) + 's step ' + (l[1] + 1) + (l[2] ? ' ' + l[2] : '')).join(', ') || 'no changes'));
@@ -671,6 +859,19 @@ function renderOverlay(force) {
     reportText = buildReport();
     body = `<div class="scroll">
 <p class="intro"><b>How this works.</b> Work through the steps below. Each one shows PASS, FAIL or PENDING. When you are done, tap <b>Copy report</b> at the top, switch to the Claude chat, paste and send.</p>
+<div class="step">${badge('reach')} <b>M1-1 &middot; Jump arc</b><p>Tap Measure. The page runs Storm through the real physics and reports the jump arc, the longest gap and step for each move, the wall-run length and the margin on every gap in the course. A margin is the longest gap minus the course gap. It must be at least 1 m.</p>
+<div class="row wrap"><button data-act="reach">Measure</button></div>${detail('reach')}</div>
+<div class="step">${badge('play')} <b>M1-2 &middot; Play the course</b><p>Tap Restart course, then run it start to finish by hand. The course has a 3 and 4 m gap (jump), a 7 and 8 m gap (jump, then Jump again in the air), a 10.5 and 11.5 m gap (add the air-dash), a wall-run pit, a 2 m and a 3.6 m step and a slope with a steep ridge. The status line at the top left shows your gaps, falls and time. Tell me which move felt wrong.</p>
+<div class="row wrap"><button data-act="cplay">Restart course</button></div>${detail('play')}</div>
+<div class="step">${badge('cbot')} <b>M1-3 &middot; Course replay</b><p>Tap Run. A recorded run of the whole course plays through the normal input path. It passes when it finishes with no falls and ends in the same state as the headless run.</p>
+<div class="row wrap"><button data-act="creplay">Run replay</button></div>${detail('cbot')}</div>
+<div class="step">${badge('cam')} <b>M1-4 &middot; Camera</b><p>Automatic. It fills in while you play or replay. Walk along the wall behind the platforms after the third checkpoint. It passes while the camera never touches a wall.</p>${detail('cam')}</div>
+<div class="step">${badge('perf')} <b>M1-5 &middot; 60 fps on the course</b><p>Tap Start. The bot runs the course for 60 seconds. It passes at 58 fps or more, never below ladder step 2 and with no 30 fps floor frames.</p>
+<div class="row wrap"><button data-act="cperf">Start 60 s test</button></div>${detail('perf')}</div>
+<div class="step"><b>Carried from M0</b><p>Edge smoothing: switch it below, play a little, then record which looks better. Palette: open the palette tab, or tap PAL at the top during play, and change colors live. Changes are kept on this phone. Tell me if the bottom edge of the screen looks off.</p>
+<div class="row wrap"><button data-act="aa">Edge smoothing: ${aaOn ? 'on' : 'off'} (tap to switch)</button></div>
+<div class="row wrap"><button data-act="aaOn">Better on</button><button data-act="aaOff">Better off</button><button data-act="aaSame">No difference</button></div><small>Verdict: ${M1.aaVerdict || 'not given'}</small></div>
+<p class="intro"><b>M0 regression.</b> These still run. The touch counter fix is covered by running the replay before the touch test.</p>
 <div class="step">${badge('sandbox')} <b>1 &middot; Sandbox</b><p>Automatic. Nothing to do.</p>${detail('sandbox')}</div>
 <div class="step">${badge('render')} <b>2 &middot; Rendering</b><p>Tap Start. This panel closes and a heavy scene appears. Run around with the stick for 60 seconds. The panel returns with the result. Run it once with edge smoothing off and once on. Both results go into the report. Tell me which looks better.</p>
 <div class="row wrap"><button data-act="render">Start 60 s test</button><button data-act="aa">Edge smoothing: ${aaOn ? 'on' : 'off'} (tap to switch)</button></div>${detail('render')}</div>
@@ -699,14 +900,15 @@ steps/frame ${stepsThisFrame}  step ${sim.step}
 embers ${emberLive}/${EMBERS}  voices ${A.voices}
 audio ${CHK.audio.state || 'off'}  pointers ${ow.join(', ') || '-'}
 pos ${f1(sim.x)}, ${f1(sim.y)}, ${f1(sim.z)}  ${sim.grounded ? 'ground' : 'air'}
-cam yaw ${f1(sim.yawOff)} pitch ${f1(sim.pitch)}
+clip ${ANIM.clip}  world ${sim.world}
+cam yaw ${f1(sim.yawOff)} pitch ${f1(sim.pitch)} arm ${f1(sim.arm)}  wall-runs ${sim.wallRuns}
 earth last hold ${sim.lastEarthHold} steps
 edge smoothing ${aaOn ? 'on' : 'off'}  cyan flags ${ROLE_FLAGS.length}
 ${viewDiag()}</pre>`;
     M.max = 0;
   } else if (ovTab === 'palette') {
     body = '<div class="scroll"><p class="intro">Tap a swatch to pick a color. The scene updates live. Changed values go into the report.</p>' +
-      Object.keys(PALNOW).map(k => `<div class="row"><span>${PALLABEL[k]}</span><input type="color" data-pal="${k}" value="${PALNOW[k]}"><code id="pv-${k}">${PALNOW[k]}</code><button data-reset="${k}">reset</button></div>`).join('') + '</div>';
+      Object.keys(PALNOW).map(k => `<div class="row"><span>${PALLABEL[k]}</span><input type="color" data-pal="${k}" value="${PALNOW[k]}"><code id="pv-${k}">${PALNOW[k]}</code><button data-reset="${k}">reset</button></div>`).join('') + '<div class="row wrap"><button data-act="palcopy">Copy palette</button><button data-act="palreset">Reset all</button></div><small>Changes are kept on this phone. Copy palette puts the hex values on the clipboard so you can paste them into the chat.</small></div>';
   } else {
     body = '<div class="scroll">' + TUNERS.map((t, i) => `<div class="row"><span>${t[0]}</span><b>${f1(t[1]())}</b><button data-tune="${i}" data-d="-1">-</button><button data-tune="${i}" data-d="1">+</button></div>`).join('') + '</div>';
   }
@@ -720,7 +922,7 @@ addEventListener('pointercancel', () => { ovTouch = false; ovHold = now() + 800;
 ov.addEventListener('click', (e) => { const b = e.target.closest('[data-act="copy"]'); if (b) { e.preventDefault(); doCopy(); } });
 ov.addEventListener('input', (e) => {
   const el = e.target; if (!el.dataset || !el.dataset.pal) return;
-  PALNOW[el.dataset.pal] = el.value; PALAPPLY[el.dataset.pal](el.value);
+  PALNOW[el.dataset.pal] = el.value; PALAPPLY[el.dataset.pal](el.value); palSave();
   const c = ov.querySelector('#pv-' + el.dataset.pal); if (c) c.textContent = el.value;
 });
 ov.addEventListener('pointerup', (e) => {
@@ -728,7 +930,7 @@ ov.addEventListener('pointerup', (e) => {
   e.preventDefault();
   if (b.dataset.tab) { ovTab = b.dataset.tab; renderOverlay(true); return; }
   if (b.dataset.tune !== undefined) { const t = TUNERS[+b.dataset.tune]; t[2](Math.round((t[1]() + t[3] * +b.dataset.d) * 1000) / 1000); renderOverlay(true); return; }
-  if (b.dataset.reset) { const k = b.dataset.reset; PALNOW[k] = PALDEF[k]; PALAPPLY[k](PALDEF[k]); renderOverlay(true); return; }
+  if (b.dataset.reset) { const k = b.dataset.reset; PALNOW[k] = PALDEF[k]; PALAPPLY[k](PALDEF[k]); palSave(); renderOverlay(true); return; }
   const a = b.dataset.act;
   if (a === 'close') { closeOverlay(); return; }
   else if (a === 'render') startRenderTest();
@@ -743,6 +945,15 @@ ov.addEventListener('pointerup', (e) => {
   else if (a === 'rec') { if (rep.rec) stopRec(); else startRec(); }
   else if (a === 'play') { startReplay(); if (rep.play) closeOverlay(); }
   else if (a === 'bot') { startBot(); closeOverlay(); }
+  else if (a === 'reach') measureReach();
+  else if (a === 'cplay') restartCourse();
+  else if (a === 'creplay') startCourseReplay();
+  else if (a === 'cperf') startCoursePerf();
+  else if (a === 'palcopy') { const t = palText(); try { navigator.clipboard.writeText('Palette: ' + t).then(() => toast('Palette copied.'), () => toast(t)); } catch (e) { toast(t); } }
+  else if (a === 'palreset') { Object.keys(PALDEF).forEach(k => { PALNOW[k] = PALDEF[k]; PALAPPLY[k](PALDEF[k]); }); palSave(); }
+  else if (a === 'aaOn') M1.aaVerdict = 'looks better with smoothing on';
+  else if (a === 'aaOff') M1.aaVerdict = 'looks better with smoothing off';
+  else if (a === 'aaSame') M1.aaVerdict = 'no visible difference';
   renderOverlay(true);
 });
 setInterval(() => { if (ovOpen && ovTab !== 'palette' && !ovTouch && now() > ovHold && !(document.activeElement && (document.activeElement.tagName === 'TEXTAREA' || document.activeElement.tagName === 'INPUT'))) renderOverlay(); }, 500);
@@ -750,6 +961,7 @@ setInterval(() => { if (ovOpen && ovTab !== 'palette' && !ovTouch && now() > ovH
 // progress banner shown while a test runs, so the screen stays free for play
 function bannerHtml() {
   const t = now(), r = CHK.render, so = CHK.soak;
+  if (M1.perf && !M1.perf.done) return `<b>Course performance</b> ${Math.max(0, 60 - Math.round((t - M1.perf.t0) / 1000))} s left. The bot runs the course. ${f1(M.fps)} fps, step ${ladderStep + 1}`;
   if (r && !r.done) return `<b>Render test</b> ${Math.max(0, 60 - Math.round((t - r.t0) / 1000))} s left. Just play. ${f1(M.fps)} fps, step ${ladderStep + 1}`;
   if (TOUCH.result === 'running') return `<b>Touch test</b> ${Math.max(0, Math.round((TOUCH.testEnd - t) / 1000))} s left. ` + touchTicks().map(x => (x[1] ? '&#10003; ' : '&#9675; ') + x[0]).join(' &nbsp; ');
   if (so && !so.done) { const left = Math.max(0, Math.round((900000 - (t - so.t0)) / 1000)); return `<b>Soak</b> ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} left. Keep the screen on. Press Home for 5 s once, then return. Left the app ${CHK.visHidden} times`; }
@@ -769,6 +981,7 @@ banner.addEventListener('pointerup', (e) => {
 function stopTests() {
   if (CHK.render && !CHK.render.done) { CHK.render.done = true; CHK.render.stopped = true; }
   if (CHK.soak && !CHK.soak.done) { CHK.soak.done = true; CHK.soak.stopped = true; tryStore(() => sessionStorage.removeItem('ns_soak'), 0); }
+  if (M1.perf && !M1.perf.done) { M1.perf.done = true; M1.perf.stopped = true; }
   if (TOUCH.result === 'running') TOUCH.result = null;
   stopReplayModes(); rep.status = 'stopped'; stress.visible = false; lastBanner = ''; bannerAt = 0; updateBanner(); openOverlay('guide');
 }
@@ -776,14 +989,16 @@ function finished(msg) { stress.visible = false; openOverlay('guide'); toast(msg
 
 function startRenderTest() {
   floorMode = false; lpm = false; if (ladderStep !== 0) setLadder(0); // every run starts from the top of the ladder
+  setWorld('field'); Sim.reset(sim, 'field');
   stress.visible = true; M.rn = 0; closeOverlay();
   CHK.render = { t0: now(), done: false, sum: 0, n: 0, worst: 0, floorFrames: 0, calls: 0, tris: 0, fps: 0, pass: false, aa: aaOn };
 }
 function startTouchTest() {
-  Object.assign(TOUCH, { result: 'running', testT0: now(), testEnd: now() + 60000, violations: 0, testMax: 0, slideAJ: 0, edgeDrags: 0, edgeDowns: 0, minX0: 1e9, edgeCancels: 0, cancels: 0, baseN: sim.needles, baseB: sim.boulders });
+  Object.assign(TOUCH, { result: 'running', testT0: now(), testEnd: now() + 60000, violations: 0, testMax: 0, slideAJ: 0, edgeDrags: 0, edgeDowns: 0, minX0: 1e9, edgeCancels: 0, cancels: 0, taps: 0, holds: 0, prevN: sim.needles, prevB: sim.boulders });
   closeOverlay();
 }
 function startSoak() {
+  setWorld('field'); Sim.reset(sim, 'field');
   stress.visible = true; M.rn = 0; closeOverlay();
   const prior = tryStore(() => sessionStorage.getItem('ns_soak'), null);
   CHK.soak = { t0: now(), done: false, changes: 0, pass: false, reload: prior ? 'YES (page reloaded during an earlier soak)' : 'no' };
@@ -794,8 +1009,26 @@ function loseContext() {
   if (!ext) { toast('This browser blocks the graphics reset test.'); return; }
   ext.loseContext(); setTimeout(() => ext.restoreContext(), 1000); toast('Graphics reset started. The game pauses for a second.');
 }
+let infoAt = 0, infoLast = '';
+function updateInfo(t) {
+  if (t - infoAt < 250) return; infoAt = t;
+  const el = $('#info'); let h = '';
+  if (started && sim.world === 'course') {
+    const tm = (sim.finishStep || sim.step) / 60, g = sim.gapDone.filter(Boolean).length;
+    h = `x ${Math.max(0, Math.round(sim.x))} m &middot; gaps ${g}/${sim.gapDone.length} &middot; falls ${sim.respawns} &middot; ${Math.floor(tm / 60)}:${String(Math.floor(tm % 60)).padStart(2, '0')}${sim.finishStep ? ' &middot; FINISH' : ''} &middot; ${ANIM.clip}`;
+  }
+  if (h !== infoLast) { infoLast = h; el.innerHTML = h; el.style.display = h ? 'block' : 'none'; }
+}
 function testTick() {
-  const t = now(), r = CHK.render;
+  const t = now(), r = CHK.render, pf = M1.perf;
+  if (pf && !pf.done) {
+    pf.sum += M.avg; pf.n++; pf.worst = Math.max(pf.worst, ladderStep); if (floorMode) pf.floorFrames++;
+    if (t - pf.t0 >= 60000) {
+      pf.done = true; pf.fps = 1000 / (pf.sum / pf.n); rep.pilot = false;
+      pf.pass = pf.fps >= 58 && pf.worst <= 1 && pf.floorFrames === 0; // ladder step 1 or 2 only
+      finished('Course performance finished: ' + (pf.pass ? 'PASS' : 'FAIL') + ', ' + f1(pf.fps) + ' fps.');
+    }
+  }
   if (r && !r.done) {
     r.sum += M.avg; r.n++; r.worst = Math.max(r.worst, ladderStep); if (floorMode) r.floorFrames++;
     if (t - r.t0 >= 60000) {
@@ -843,8 +1076,10 @@ function boot() {
   };
   [['#playBtn', false], ['#testBtn', true]].forEach(([id, t]) => { const el = $(id); let fired = 0; const h = (e) => { if (now() - fired < 400) return; fired = now(); go(e, t); }; el.addEventListener('touchend', h); el.addEventListener('click', h); });
   $('#tb').addEventListener('pointerup', (e) => { e.preventDefault(); if (started) toggleOverlay(); });
+  $('#pb').addEventListener('pointerup', (e) => { e.preventDefault(); if (!started) return; if (ovOpen && ovTab === 'palette') closeOverlay(); else openOverlay('palette'); });
+  palLoad(); setWorld('course');
   requestAnimationFrame(frame);
 }
-window.__NS = { openOverlay, closeOverlay, doCopy, buildReport, sim, Sim, CHK, TOUCH, M, owners, get started() { return started; }, P, startRenderTest, startBot, rep, ROLE_FLAGS, BTN, btnPos };
+window.__NS = { Sim, M1, setWorld, startCourseReplay, startCoursePerf, measureReach, courseRec, ANIM, openOverlay, closeOverlay, doCopy, buildReport, sim, Sim, CHK, TOUCH, M, owners, get started() { return started; }, P, startRenderTest, startBot, rep, ROLE_FLAGS, BTN, btnPos };
 boot();
 })();
