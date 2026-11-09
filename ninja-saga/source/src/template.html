@@ -13,7 +13,7 @@
 <title>Ninja Saga __BUILD__</title>
 <style>
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
-html,body{position:fixed;top:0;left:0;width:100%;height:100%;margin:0;overflow:hidden;overscroll-behavior:none;background:#0f3d40;color:#fff;font-family:-apple-system,system-ui,sans-serif;touch-action:none}
+html,body{position:fixed;top:0;left:0;width:100%;height:var(--vh,100%);margin:0;overflow:hidden;overscroll-behavior:none;background:#0f3d40;color:#fff;font-family:-apple-system,system-ui,sans-serif;touch-action:none}
 #stage,#gl,#vig,#hud,#in{position:absolute;top:0;left:0;width:100%;height:100%;display:block}
 #vig{pointer-events:none;opacity:0;background:radial-gradient(ellipse at center,rgba(15,61,64,0) 55%,rgba(15,61,64,.9) 100%)}
 #hud{pointer-events:none}
@@ -26,7 +26,7 @@ html,body{position:fixed;top:0;left:0;width:100%;height:100%;margin:0;overflow:h
 #stThumb{position:absolute;top:0;left:0;width:44px;height:44px;border-radius:50%;background:rgba(255,255,255,.4);display:none}
 #lock{position:absolute;top:0;left:0;width:32px;height:32px;border:3px solid #00f5d4;border-radius:4px;display:none;margin:0}
 #probe{position:fixed;left:0;top:0;width:0;height:0;visibility:hidden;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
-.full{position:fixed;top:0;left:0;width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px;z-index:9}
+.full{position:fixed;top:0;left:0;width:100%;height:var(--vh,100%);display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px;z-index:9}
 #start{background:#0f3d40;z-index:10}
 #start h1{margin:0 0 4px;font-size:34px;letter-spacing:3px}
 #start p{margin:4px 0;font-size:16px;opacity:.9}
@@ -53,9 +53,9 @@ html,body{position:fixed;top:0;left:0;width:100%;height:100%;margin:0;overflow:h
 #ov .row input[type=color]{width:56px;height:34px;padding:0;border:1px solid #4a5a54;background:none}
 #ov b.PASS,#ov b.SEEN{color:#6dff9a}#ov b.FAIL{color:#ff6b6b}#ov b.RUNNING{color:#ffd45c}#ov b.PENDING{color:#9aa5a0}
 #ov textarea{width:100%;font:11px ui-monospace,Menlo,monospace;background:#111;color:#ddd;border:1px solid #444;-webkit-user-select:text;user-select:text}
-#bar{position:fixed;top:6px;left:50%;transform:translateX(-50%);z-index:11;display:flex;align-items:center;gap:6px;max-width:62%;pointer-events:none}
+#bar{position:fixed;top:6px;left:256px;right:8px;z-index:11;display:flex;align-items:center;gap:6px;pointer-events:none}
 #bar button{pointer-events:auto;font:700 12px -apple-system,system-ui,sans-serif;color:#fff;background:rgba(11,13,12,.7);border:1px solid #00f5d4;border-radius:6px;padding:7px 10px;touch-action:manipulation}
-#banner{display:none;align-items:center;gap:6px;font:12px/1.3 -apple-system,system-ui,sans-serif;background:rgba(11,13,12,.72);border-radius:6px;padding:5px 8px;pointer-events:none}
+#banner{display:none;flex:0 1 auto;min-width:0;align-items:center;gap:6px;font:12px/1.3 -apple-system,system-ui,sans-serif;background:rgba(11,13,12,.72);border-radius:6px;padding:5px 8px;pointer-events:none}
 #toast{display:none;position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:13;max-width:70%;background:#0f6b66;border:1px solid #00f5d4;border-radius:8px;padding:9px 12px;font:13px -apple-system,system-ui,sans-serif;text-align:center;pointer-events:none}
 #start button{font:700 20px -apple-system,system-ui,sans-serif;color:#fff;background:#0f6b66;border:2px solid #00f5d4;border-radius:10px;padding:12px 30px;margin:6px;touch-action:manipulation}
 #start button.alt{background:#25302c;border-color:#4a5a54;font-size:16px}
