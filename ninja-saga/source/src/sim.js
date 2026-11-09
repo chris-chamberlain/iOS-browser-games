@@ -148,6 +148,25 @@ const Sim = (function () {
     }
     return best;
   }
+  // Keeps the follow target out of boxes padded by the camera radius, so the camera ray never starts inside geometry.
+  function pushTarget(s, w) {
+    const R = T.camRadius;
+    for (let pass = 0; pass < 3; pass++) {
+      query(w, s.tx - R - 0.1, s.tx + R + 0.1, s.ty - R - 0.1, s.ty + R + 0.1, s.tz - R - 0.1, s.tz + R + 0.1, _q2);
+      let moved = false;
+      for (let i = 0; i < _q2.length; i++) {
+        const b = _q2[i];
+        const l0 = s.tx - (b.x0 - R), h0 = (b.x1 + R) - s.tx, l1 = s.ty - (b.y0 - R), h1 = (b.y1 + R) - s.ty, l2 = s.tz - (b.z0 - R), h2 = (b.z1 + R) - s.tz;
+        if (l0 <= 0 || h0 <= 0 || l1 <= 0 || h1 <= 0 || l2 <= 0 || h2 <= 0) continue;
+        const m = Math.min(l0, h0, l1, h1, l2, h2);
+        if (m === l0) { s.tx -= l0; if (s.tvx > 0) s.tvx = 0; } else if (m === h0) { s.tx += h0; if (s.tvx < 0) s.tvx = 0; }
+        else if (m === l1) { s.ty -= l1; if (s.tvy > 0) s.tvy = 0; } else if (m === h1) { s.ty += h1; if (s.tvy < 0) s.tvy = 0; }
+        else if (m === l2) { s.tz -= l2; if (s.tvz > 0) s.tvz = 0; } else { s.tz += h2; if (s.tvz < 0) s.tvz = 0; }
+        moved = true;
+      }
+      if (!moved) break;
+    }
+  }
   // The ray runs from the follow target to the wanted camera position. Boxes that contain the target are skipped.
   // The arm shortens at once and recovers at 4 m/s.
   function camCollide(s, w) {
@@ -160,7 +179,7 @@ const Sim = (function () {
       if (o[0] >= b.x0 && o[0] <= b.x1 && o[1] >= b.y0 && o[1] <= b.y1 && o[2] >= b.z0 && o[2] <= b.z1) continue;
       // A target inside the padded shell but outside the box, with the ray pointing away from the box, does not hit it.
       const nx = o[0] - Math.min(Math.max(o[0], b.x0), b.x1), ny = o[1] - Math.min(Math.max(o[1], b.y0), b.y1), nz = o[2] - Math.min(Math.max(o[2], b.z0), b.z1);
-      if (nx * d[0] + ny * d[1] + nz * d[2] >= 0 && nx * nx + ny * ny + nz * nz < T.camRadius * T.camRadius) continue;
+      if (nx * d[0] + ny * d[1] + nz * d[2] >= 0 && Math.abs(nx) <= T.camRadius + 0.05 && Math.abs(ny) <= T.camRadius + 0.05 && Math.abs(nz) <= T.camRadius + 0.05) continue;
       let t0 = 0, t1 = hit, ok = true;
       const R = T.camRadius, lo = [b.x0 - R, b.y0 - R, b.z0 - R], hi = [b.x1 + R, b.y1 + R, b.z1 + R];
       for (let a = 0; a < 3 && ok; a++) {
@@ -345,8 +364,10 @@ const Sim = (function () {
     s.tvx += (wn * wn * (tx - s.tx) - 2 * wn * s.tvx) * STEP; s.tx += s.tvx * STEP;
     s.tvy += (wn * wn * (ty - s.ty) - 2 * wn * s.tvy) * STEP; s.ty += s.tvy * STEP;
     s.tvz += (wn * wn * (tz - s.tz) - 2 * wn * s.tvz) * STEP; s.tz += s.tvz * STEP;
+    pushTarget(s, w);
     camCollide(s, w);
     updateCamPos(s);
+    for (let k = 0; k < 12 && s.arm > 0 && boxDist(w, s.cx, s.cy, s.cz) < 0.2; k++) { s.arm = Math.max(0, s.arm - 0.25); updateCamPos(s); }
     const cd = boxDist(w, s.cx, s.cy, s.cz);
     if (cd < s.camMin) s.camMin = cd;
     if (cd < 0.2) s.camClip++;
