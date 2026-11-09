@@ -1062,7 +1062,7 @@ function boot() {
   sandboxReport();
   $('#ver').textContent = `${BUILD} · Three.js r${THREE.REVISION} · ${(FILE_SIZE / 1e6).toFixed(2)} MB`;
   if (!CHK.sandbox.gl2) { $('#startMsg').textContent = 'This page needs WebGL2 (Safari 15 or later).'; return; }
-  makeRenderer(false);
+  makeRenderer(true);
   camera.aspect = W / H; camera.updateProjectionMatrix(); emberMat.uniforms.uScale.value = H / (2 * Math.tan(TUNE.fov * Math.PI / 360));
   setEmberLive(); layoutControls(); applyResize(true);
   { const [vw, vh] = viewSize(); if (Math.abs(vw - W) >= 2 || Math.abs(vh - H) >= 2) applyResize('poll'); }
