@@ -2,7 +2,7 @@
 
 3D action platformer for iPhone Safari, landscape. Built with Three.js (inlined, no CDN).
 
-Current build: M1-01 Storm movement and test course.
+Current build: M1-02 Storm movement and test course (camera wall padding).
 
 Play: https://chris-chamberlain.github.io/ios-browser-games/ninja-saga/
 On iPhone, open the link in Safari, tap Share, Add to Home Screen, then launch from the icon for full screen.

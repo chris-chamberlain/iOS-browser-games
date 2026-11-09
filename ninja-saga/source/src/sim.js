@@ -12,7 +12,7 @@ const Sim = (function () {
     radius: 0.35, height: 1.7, supportR: 0.2, stepUp: 0.35, snapDown: 0.3, slopeMax: Math.tan(50 * DEG),
     camDist: 9, camSettle: 0.2, camYawMax: 40, camPitchMin: 5, camPitchMax: 35,
     camPitchBase: 15, camDragDeg: 0.25, camIdleSteps: 120, camLead: 1.5,
-    camArmMin: 1.5, camPull: 0.4, camRestore: 4
+    camRadius: 0.25, camPull: 0.2, camRestore: 4
   };
   const B = { ATK: 1, JMP: 2, DSH: 4, EAR: 8, LCK: 16 };
 
@@ -154,19 +154,22 @@ const Sim = (function () {
     const d = camDir(s), want = T.camDist;
     const o = [s.tx, s.ty, s.tz], ex = o[0] + d[0] * want, ey = o[1] + d[1] * want, ez = o[2] + d[2] * want;
     let hit = want;
-    query(w, Math.min(o[0], ex) - 0.1, Math.max(o[0], ex) + 0.1, Math.min(o[1], ey) - 0.1, Math.max(o[1], ey) + 0.1, Math.min(o[2], ez) - 0.1, Math.max(o[2], ez) + 0.1, _q2);
+    query(w, Math.min(o[0], ex) - 0.4, Math.max(o[0], ex) + 0.4, Math.min(o[1], ey) - 0.4, Math.max(o[1], ey) + 0.4, Math.min(o[2], ez) - 0.4, Math.max(o[2], ez) + 0.4, _q2);
     for (let i = 0; i < _q2.length; i++) {
       const b = _q2[i];
       if (o[0] >= b.x0 && o[0] <= b.x1 && o[1] >= b.y0 && o[1] <= b.y1 && o[2] >= b.z0 && o[2] <= b.z1) continue;
+      // A target inside the padded shell but outside the box, with the ray pointing away from the box, does not hit it.
+      const nx = o[0] - Math.min(Math.max(o[0], b.x0), b.x1), ny = o[1] - Math.min(Math.max(o[1], b.y0), b.y1), nz = o[2] - Math.min(Math.max(o[2], b.z0), b.z1);
+      if (nx * d[0] + ny * d[1] + nz * d[2] >= 0 && nx * nx + ny * ny + nz * nz < T.camRadius * T.camRadius) continue;
       let t0 = 0, t1 = hit, ok = true;
-      const lo = [b.x0, b.y0, b.z0], hi = [b.x1, b.y1, b.z1];
+      const R = T.camRadius, lo = [b.x0 - R, b.y0 - R, b.z0 - R], hi = [b.x1 + R, b.y1 + R, b.z1 + R];
       for (let a = 0; a < 3 && ok; a++) {
         if (Math.abs(d[a]) < 1e-9) { if (o[a] < lo[a] || o[a] > hi[a]) ok = false; }
         else { let a1 = (lo[a] - o[a]) / d[a], a2 = (hi[a] - o[a]) / d[a]; if (a1 > a2) { const t = a1; a1 = a2; a2 = t; } if (a1 > t0) t0 = a1; if (a2 < t1) t1 = a2; if (t0 > t1) ok = false; }
       }
       if (ok && t0 < hit) hit = t0;
     }
-    const wantArm = hit >= want ? want : clamp(hit - T.camPull, T.camArmMin, want);
+    const wantArm = hit >= want ? want : Math.max(hit - T.camPull, hit * 0.5);
     if (wantArm < s.arm) s.arm = wantArm; else s.arm = Math.min(wantArm, s.arm + T.camRestore * STEP);
   }
 
